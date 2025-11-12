@@ -24,7 +24,7 @@ st.set_page_config(
     page_icon="📈"
 )
 
-# Custom dark-gold theme
+# Custom CSS for dark-gold theme
 st.markdown("""
     <style>
         body {
@@ -35,7 +35,7 @@ st.markdown("""
             background: linear-gradient(180deg, #0e1117 0%, #1a1f2b 100%);
         }
         h1, h2, h3, h4 {
-            color: #FFD700;
+            color: #FFD700; /* Gold headings */
         }
         .stButton>button {
             background-color: #1e3d59;
@@ -68,39 +68,18 @@ forecast_days = st.sidebar.slider("Select Future Forecast Days", 10, 90, 30)
 train_ratio = st.sidebar.slider("Training Data Ratio", 0.6, 0.9, 0.8)
 
 # ===============================================================
-# 📦 Robust CSV Loader
+# 📦 Load & Clean Data
 # ===============================================================
 def load_price_data(file, label):
-    try:
-        df = pd.read_csv(file)
-        df.columns = df.columns.str.strip()
-        df.rename(columns=lambda x: x.strip(), inplace=True)
-
-        # Auto-detect Date & Close columns
-        date_col, close_col = None, None
-        for col in df.columns:
-            if "date" in col.lower():
-                date_col = col
-            if "close" in col.lower():
-                close_col = col
-
-        if date_col is None or close_col is None:
-            st.error(f"❌ Could not find 'Date' or 'Close' column in {label} file.")
-            st.write("Detected columns:", df.columns.tolist())
-            return None
-
-        # Select required columns
-        df = df[[date_col, close_col]].copy()
-        df.columns = ["Date", f"Close_{label}"]
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df[f"Close_{label}"] = pd.to_numeric(df[f"Close_{label}"], errors="coerce")
-        df = df.dropna().sort_values("Date")
-
-        return df
-
-    except Exception as e:
-        st.error(f"⚠️ Error reading {label} file: {e}")
-        return None
+    df = pd.read_csv(file)
+    df.columns = df.columns.str.strip()
+    date_col = [c for c in df.columns if "date" in c.lower()][0]
+    close_col = [c for c in df.columns if "close" in c.lower()][0]
+    df = df[[date_col, close_col]]
+    df.columns = ["Date", f"Close_{label}"]
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.sort_values("Date").dropna()
+    return df
 
 # ===============================================================
 # 🧾 Main Logic
@@ -110,10 +89,6 @@ if nifty50_file and niftybees_file:
 
     nifty50 = load_price_data(nifty50_file, "NIFTY50")
     niftybees = load_price_data(niftybees_file, "NIFTYBEES")
-
-    if nifty50 is None or niftybees is None:
-        st.stop()
-
     df = pd.merge(nifty50, niftybees, on="Date", how="inner").dropna()
 
     # Tabs
@@ -126,7 +101,6 @@ if nifty50_file and niftybees_file:
         st.subheader("Dataset Overview")
         st.dataframe(df.head(10), use_container_width=True)
         st.write(f"**Total Records:** {len(df)}")
-
         st.line_chart(df.set_index("Date")[["Close_NIFTY50", "Close_NIFTYBEES"]])
 
     # ===========================================================
@@ -134,7 +108,6 @@ if nifty50_file and niftybees_file:
     # ===========================================================
     with tab2:
         st.subheader("Exploratory Data Analysis")
-
         df["Tracking_Error"] = df["Close_NIFTYBEES"] - df["Close_NIFTY50"]
         df["Tracking_Error_%"] = (df["Tracking_Error"] / df["Close_NIFTY50"]) * 100
         corr = df["Close_NIFTY50"].corr(df["Close_NIFTYBEES"])
@@ -151,15 +124,14 @@ if nifty50_file and niftybees_file:
         ax.legend(); ax.set_title("NIFTY 50 vs NIFTY BeES")
         st.pyplot(fig)
 
-        st.markdown("#### Tracking Error (%) Over Time")
+        st.markdown("#### Tracking Error (%)")
         st.area_chart(df.set_index("Date")["Tracking_Error_%"])
 
     # ===========================================================
-    # 🔮 Tab 3: Forecasting
+    # 🔮 Tab 3: Forecasting (Updated)
     # ===========================================================
     with tab3:
         st.subheader("Forecasting Models (SARIMAX & Prophet)")
-
         df["Log_NIFTY50"] = np.log(df["Close_NIFTY50"])
         df["Log_NIFTYBEES"] = np.log(df["Close_NIFTYBEES"])
 
@@ -171,16 +143,13 @@ if nifty50_file and niftybees_file:
         st.markdown("### 📈 SARIMAX Forecast for NIFTY 50")
         model = SARIMAX(train["Log_NIFTY50"], order=(1,1,1), enforce_stationarity=False, enforce_invertibility=False)
         res = model.fit(disp=False)
-
         fc = res.get_forecast(steps=forecast_days)
         mean_log = fc.predicted_mean
         ci = fc.conf_int()
         forecast_price = np.exp(mean_log)
         lower_ci = np.exp(ci.iloc[:, 0])
         upper_ci = np.exp(ci.iloc[:, 1])
-
-        future_index = pd.date_range(start=df["Date"].iloc[-1] + pd.Timedelta(days=1),
-                                     periods=forecast_days, freq='B')
+        future_index = pd.date_range(start=df["Date"].iloc[-1] + pd.Timedelta(days=1), periods=forecast_days, freq='B')
 
         future_forecast_nifty50 = pd.DataFrame({
             "Date": future_index,
@@ -190,7 +159,11 @@ if nifty50_file and niftybees_file:
         })
 
         st.success("✅ NIFTY 50 Future Forecast Generated Successfully!")
-        st.dataframe(future_forecast_nifty50.style.format("{:.2f}"), use_container_width=True)
+        st.dataframe(future_forecast_nifty50.style.format({
+            "Predicted_Price": "{:.2f}",
+            "Lower_CI": "{:.2f}",
+            "Upper_CI": "{:.2f}"
+        }), use_container_width=True)
 
         mae = mean_absolute_error(test["Close_NIFTY50"].iloc[-len(mean_log):], np.exp(mean_log))
         rmse = math.sqrt(mean_squared_error(test["Close_NIFTY50"].iloc[-len(mean_log):], np.exp(mean_log)))
@@ -200,18 +173,18 @@ if nifty50_file and niftybees_file:
 
         fig, ax = plt.subplots(figsize=(10,5))
         ax.plot(df["Date"], df["Close_NIFTY50"], label="Historical", color="#00BFFF")
-        ax.plot(future_forecast_nifty50["Date"], future_forecast_nifty50["Predicted_Price"],
-                label="Forecast", color="#FFD700")
-        ax.fill_between(future_forecast_nifty50["Date"],
-                        future_forecast_nifty50["Lower_CI"],
-                        future_forecast_nifty50["Upper_CI"],
-                        color='gray', alpha=0.2)
+        ax.plot(future_forecast_nifty50["Date"], future_forecast_nifty50["Predicted_Price"], label="Forecast", color="#FFD700")
+        ax.fill_between(future_forecast_nifty50["Date"], future_forecast_nifty50["Lower_CI"], future_forecast_nifty50["Upper_CI"], color='gray', alpha=0.2)
         ax.legend(); ax.set_title("NIFTY 50 Forecast (SARIMAX)")
         st.pyplot(fig)
 
         csv_nifty50 = future_forecast_nifty50.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download NIFTY 50 Forecast (CSV)", csv_nifty50,
-                           "NIFTY50_Future_Forecast.csv", "text/csv")
+        st.download_button(
+            label="📥 Download NIFTY 50 Forecast (CSV)",
+            data=csv_nifty50,
+            file_name="NIFTY50_Future_Forecast.csv",
+            mime="text/csv"
+        )
 
         # --- Prophet Forecast for NIFTY BeES ---
         st.markdown("### 🔮 Prophet Forecast for NIFTY BeES")
@@ -220,12 +193,15 @@ if nifty50_file and niftybees_file:
         model.fit(df_prophet)
         future = model.make_future_dataframe(periods=forecast_days)
         forecast = model.predict(future)
-
         future_forecast_bees = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(forecast_days)
         future_forecast_bees.columns = ["Date", "Predicted_Price", "Lower_CI", "Upper_CI"]
 
         st.success("✅ NIFTY BeES Future Forecast Generated Successfully!")
-        st.dataframe(future_forecast_bees.style.format("{:.2f}"), use_container_width=True)
+        st.dataframe(future_forecast_bees.style.format({
+            "Predicted_Price": "{:.2f}",
+            "Lower_CI": "{:.2f}",
+            "Upper_CI": "{:.2f}"
+        }), use_container_width=True)
 
         fig1, ax1 = plt.subplots(figsize=(10,5))
         ax1.plot(df["Date"], df["Close_NIFTYBEES"], label="Historical", color="#00BFFF")
@@ -235,8 +211,12 @@ if nifty50_file and niftybees_file:
         st.pyplot(fig1)
 
         csv_bees = future_forecast_bees.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download NIFTY BeES Forecast (CSV)", csv_bees,
-                           "NIFTYBEES_Future_Forecast.csv", "text/csv")
+        st.download_button(
+            label="📥 Download NIFTY BeES Forecast (CSV)",
+            data=csv_bees,
+            file_name="NIFTYBEES_Future_Forecast.csv",
+            mime="text/csv"
+        )
 
     # ===========================================================
     # 💾 Tab 4: Download
@@ -244,13 +224,18 @@ if nifty50_file and niftybees_file:
     with tab4:
         st.subheader("Download Processed Dataset")
         csv_all = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Cleaned & Merged Data (CSV)",
-                           csv_all, "Merged_NIFTY_Data.csv", "text/csv")
+        st.download_button(
+            label="📥 Download Cleaned & Merged Data (CSV)",
+            data=csv_all,
+            file_name="Merged_NIFTY_Data.csv",
+            mime="text/csv"
+        )
 
 # ===============================================================
 # 🧾 Footer
 # ===============================================================
 st.markdown("---")
 st.markdown("<p style='text-align: center; color: #AAAAAA;'>© 2025 | Developed by <b>[Your Name]</b> | Financial Forecasting Dashboard using Python, Streamlit, SARIMAX & Prophet</p>", unsafe_allow_html=True)
+
 
 
